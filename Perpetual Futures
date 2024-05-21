@@ -1,0 +1,65 @@
+// SPDX-License-Identifier: MIT
+pragma solidity ^0.8.0;
+
+import "@openzeppelin/contracts/token/ERC20/IERC20.sol";
+import "@openzeppelin/contracts/access/Ownable.sol";
+import "@chainlink/contracts/src/v0.8/interfaces/AggregatorV3Interface.sol";
+
+contract PerpetualFutures is Ownable {
+    enum Side { LONG, SHORT }
+
+    AggregatorV3Interface internal priceFeed;
+
+    struct Position {
+        address trader;
+        uint256 margin;
+        Side side;
+    }
+
+    mapping(address => Position) public positions;
+
+    event PositionOpened(address indexed trader, uint256 indexed margin, Side side);
+    event PositionClosed(address indexed trader, uint256 indexed profit);
+
+    constructor(address _priceFeedAddress) {
+        priceFeed = AggregatorV3Interface(_priceFeedAddress);
+    }
+
+    function openPosition(Side side) external payable {
+        require(side == Side.LONG || side == Side.SHORT, "Invalid side");
+        require(positions[msg.sender].margin == 0, "Position already exists");
+
+        uint256 latestPrice = getLatestPrice();
+        require(latestPrice > 0, "Invalid price feed");
+
+        uint256 margin = msg.value;
+        positions[msg.sender] = Position(msg.sender, margin, side);
+
+        emit PositionOpened(msg.sender, margin, side);
+    }
+
+    function closePosition() external {
+        Position storage position = positions[msg.sender];
+        require(position.margin > 0, "No position exists");
+
+        uint256 latestPrice = getLatestPrice();
+        require(latestPrice > 0, "Invalid price feed");
+
+        uint256 profit;
+        if (position.side == Side.LONG) {
+            profit = (getLatestPrice() * position.margin) / 1 ether - position.margin;
+        } else {
+            profit = position.margin - (getLatestPrice() * position.margin) / 1 ether;
+        }
+
+        payable(msg.sender).transfer(position.margin + profit);
+        delete positions[msg.sender];
+
+        emit PositionClosed(msg.sender, profit);
+    }
+
+    function getLatestPrice() public view returns (uint256) {
+        (,int price,,,) = priceFeed.latestRoundData();
+        return uint256(price);
+    }
+}
